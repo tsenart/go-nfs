@@ -51,9 +51,21 @@ func onRead(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	defer fh.Close()
 
+	// Check if the opened file knows its actual size (for dynamic content).
+	// This allows virtual filesystems to report accurate sizes after opening.
+	var actualSize int64 = -1
+	if sizer, ok := fh.(interface{ Size() int64 }); ok {
+		actualSize = sizer.Size()
+	}
+
 	resp := nfsReadResponse{}
 
-	if obj.Count > CheckRead {
+	// Use actual file size if available, otherwise fall back to Stat
+	if actualSize >= 0 {
+		if actualSize-int64(obj.Offset) < int64(obj.Count) {
+			obj.Count = uint32(uint64(actualSize) - obj.Offset)
+		}
+	} else if obj.Count > CheckRead {
 		info, err := fs.Stat(fs.Join(path...))
 		if err != nil {
 			return &NFSStatusError{NFSStatusAccess, err}
@@ -77,11 +89,17 @@ func onRead(ctx context.Context, w *response, userHandle Handler) error {
 		resp.EOF = 1
 	}
 
+	// Use actual size for post-op attrs if available
+	postOpAttrs := tryStat(fs, path)
+	if actualSize >= 0 && postOpAttrs != nil {
+		postOpAttrs.Filesize = uint64(actualSize)
+	}
+
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, path)); err != nil {
+	if err := WritePostOpAttrs(writer, postOpAttrs); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 

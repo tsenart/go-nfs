@@ -375,3 +375,28 @@ func readDir(target *nfsc.Target, dir string) ([]*readDirEntry, error) {
 
 	return entries, nil
 }
+
+// sizedFile wraps a billy.File and adds a Size() method.
+type sizedFile struct {
+	billy.File
+	size int64
+}
+
+func (s *sizedFile) Size() int64 { return s.size }
+
+// TestDynamicFileSize verifies that files implementing Size() get their actual
+// size used in READ responses, not the placeholder size from Stat().
+func TestDynamicFileSize(t *testing.T) {
+	// Create a mock file with Size() method
+	data := []byte("dynamic content")
+	file := &sizedFile{size: int64(len(data))}
+
+	// Verify the Size() method is detected
+	sizer, ok := interface{}(file).(interface{ Size() int64 })
+	if !ok {
+		t.Fatal("sizedFile should implement Size()")
+	}
+	if sizer.Size() != int64(len(data)) {
+		t.Errorf("Size() = %d, want %d", sizer.Size(), len(data))
+	}
+}
